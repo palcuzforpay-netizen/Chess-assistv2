@@ -1,0 +1,48 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip project
+        run: for z in *.zip; do unzip -o "$z"; done
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - name: Get Stockfish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p sf app/src/main/jniLibs/arm64-v8a
+          for TAG in "" sf_17.1 sf_17 sf_16.1; do
+            gh release download $TAG --repo official-stockfish/Stockfish --pattern '*android*arm*64*' --dir sf --clobber && [ -n "$(ls sf)" ] && break
+          done
+          cd sf
+          for f in *.tar.gz *.tgz; do [ -e "$f" ] && tar -xzf "$f"; done
+          for f in *.tar; do [ -e "$f" ] && tar -xf "$f"; done
+          for f in *.zip; do [ -e "$f" ] && unzip -o "$f"; done
+          cd ..
+          # every 64-bit ARM program in the download
+          find sf -type f -exec file {} + | grep -i 'aarch64' | cut -d: -f1 > bins.txt
+          echo "ARM64 binaries found:"; cat bins.txt
+          # prefer the plain build that runs on any 64-bit phone
+          BIN=$(grep -viE 'dotprod|i8mm|sve' bins.txt | awk '{ print length, $0 }' | sort -n | head -n1 | cut -d' ' -f2-)
+          [ -z "$BIN" ] && BIN=$(head -n1 bins.txt)
+          echo "Using: $BIN"
+          cp "$BIN" app/src/main/jniLibs/arm64-v8a/libstockfish.so
+      - name: Build
+        run: gradle assembleDebug --no-daemon
+      - name: Publish APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
